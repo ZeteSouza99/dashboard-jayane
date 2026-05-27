@@ -1,0 +1,20 @@
+# Ambiente Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Dados sensíveis: NÃO commitar planilhas brutas com nomes de fornecedores reais
+# (descomente se for público de verdade)
+# data/raw/*.xlsx
+# *.xlsx
+
+# Outputs intermediários
+data/outputs/*.txt
