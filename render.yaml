@@ -1,0 +1,30 @@
+# render.yaml — Infrastructure as Code para Render.com
+# Sobe o dashboard como Web Service free tier.
+#
+# Pré-requisito: este repositório precisa estar no GitHub.
+# Depois: dashboard.render.com → New → Blueprint → seleciona este repo.
+services:
+  - type: web
+    name: dashboardjay          # → gera URL https://dashboardjay.onrender.com
+    runtime: python
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      python src/build_fact_table.py
+      python src/analytics_ml.py
+    startCommand: |
+      streamlit run src/dashboard.py \
+        --server.port $PORT \
+        --server.address 0.0.0.0 \
+        --server.headless true \
+        --server.enableCORS false \
+        --server.enableXsrfProtection false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+        value: "false"
+    autoDeploy: true            # qualquer push em main re-deploya

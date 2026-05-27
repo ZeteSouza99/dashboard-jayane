@@ -1,0 +1,2 @@
+# runtime.txt — versão fixa do Python para Render/Heroku/Railway
+python-3.11.9
