@@ -7,6 +7,8 @@ Rodar:
 """
 from __future__ import annotations
 
+import io
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +19,12 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent.parent
 STAGING = ROOT / "data" / "staging"
+sys.path.insert(0, str(ROOT / "src"))
+from build_fact_table import (  # noqa: E402
+    processar_em_memoria,
+    validar_planilha,
+    detectar_ano_no_nome,
+)
 
 # =====================================================================
 # Configuração e tema
@@ -299,7 +307,8 @@ def load_data():
     }
 
 
-dados = load_data()
+dados = st.session_state.get("dados_upload") or load_data()
+fonte_label = st.session_state.get("fonte_label", "Base oficial (parquets)")
 fato = dados["fato"].drop(columns=["FANTASIA", "FORNECEDOR"]).merge(
     dados["dim"][["CODFORNEC", "FANTASIA", "FORNECEDOR"]], on="CODFORNEC"
 )
@@ -327,6 +336,100 @@ with st.sidebar:
         '</div>',
         unsafe_allow_html=True,
     )
+
+    # -----------------------------------------------------------------
+    # Upload de planilha (padrão Jayane)
+    # -----------------------------------------------------------------
+    with st.expander("📤 Carregar planilha (.xlsx)", expanded=False):
+        st.caption(
+            "Padrão aceito: abas **FILIAL 1..4**, colunas "
+            "`CODFORNEC, FILIAL, FORNECEDOR, CODCOMPRADOR, JANEIRO, FEVEREIRO, MARCO`. "
+            "O sistema detecta o ano pelo nome do arquivo (`...2025...xlsx`)."
+        )
+        ups = st.file_uploader(
+            "Selecione 1 ou mais planilhas",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            key="uploader_xlsx",
+        )
+        if ups:
+            arquivos_validos: dict[int, io.BytesIO] = {}
+            for up in ups:
+                buf = io.BytesIO(up.getvalue())
+                rel = validar_planilha(buf, nome=up.name)
+                with st.container(border=True):
+                    st.markdown(f"**{up.name}**")
+                    for m in rel["mensagens"]:
+                        if m.startswith("[OK]"):
+                            st.success(m)
+                        elif m.startswith("[AVISO]"):
+                            st.warning(m)
+                        else:
+                            st.error(m)
+                    if rel["ok"]:
+                        ano = rel["ano_sugerido"]
+                        ano = st.number_input(
+                            "Ano destes dados", min_value=2000, max_value=2100,
+                            value=int(ano) if ano else 2026, step=1,
+                            key=f"ano_{up.name}",
+                        )
+                        buf.seek(0)
+                        arquivos_validos[int(ano)] = buf
+            col_a, col_b = st.columns(2)
+            with col_a:
+                substituir = st.checkbox(
+                    "Substituir base atual", value=True,
+                    help="Se desmarcado, mescla com os parquets oficiais (anos diferentes).",
+                )
+            with col_b:
+                aplicar = st.button("Aplicar", type="primary", width="stretch",
+                                       disabled=not arquivos_validos)
+            if aplicar and arquivos_validos:
+                try:
+                    if not substituir:
+                        base = load_data()
+                        anos_novos = set(arquivos_validos.keys())
+                        fato_base = base["fato"][~base["fato"]["ANO"].isin(anos_novos)]
+                        novo = processar_em_memoria(arquivos_validos)
+                        fato_merge = pd.concat([fato_base, novo["fato"]], ignore_index=True)
+                        # Recalcula derivadas a partir do fato consolidado
+                        from build_fact_table import (
+                            consolidar_trimestre, comparativo_anual, dimensao_fornecedor,
+                        )
+                        dados_final = {
+                            "fato": fato_merge,
+                            "cons": consolidar_trimestre(fato_merge),
+                            "comp": comparativo_anual(fato_merge),
+                            "dim": dimensao_fornecedor(fato_merge),
+                            "forecast": None, "forecast_total": None,
+                            "clusters": None, "anomalias": None, "metricas": None,
+                        }
+                        label = f"Mesclado: oficial + upload ({sorted(anos_novos)})"
+                    else:
+                        novo = processar_em_memoria(arquivos_validos)
+                        dados_final = {
+                            "fato": novo["fato"],
+                            "cons": novo["cons"],
+                            "comp": novo["comp"],
+                            "dim": novo["dim"],
+                            "forecast": None, "forecast_total": None,
+                            "clusters": None, "anomalias": None, "metricas": None,
+                        }
+                        label = f"Upload (anos {sorted(arquivos_validos.keys())})"
+                    st.session_state["dados_upload"] = dados_final
+                    st.session_state["fonte_label"] = label
+                    st.success("Dados aplicados. Recarregando…")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Falha ao processar: {e}")
+        if "dados_upload" in st.session_state:
+            if st.button("↩ Voltar à base oficial", width="stretch"):
+                st.session_state.pop("dados_upload", None)
+                st.session_state.pop("fonte_label", None)
+                st.rerun()
+
+    st.caption(f"Fonte: **{fonte_label}**")
+    st.markdown("---")
 
     st.markdown("## Filtros")
     anos = sorted(fato["ANO"].unique().tolist())

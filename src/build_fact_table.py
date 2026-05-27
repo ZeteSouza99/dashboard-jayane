@@ -11,8 +11,10 @@ Saídas:
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -41,7 +43,12 @@ SCHEMA_BASE = [
 # --------------------------------------------------------------------------
 # Camadas 1-2: Ingestão + limpeza
 # --------------------------------------------------------------------------
-def ler_aba(path: Path, sheet: str, ano: int) -> pd.DataFrame:
+ABAS_ESPERADAS = ["FILIAL 1", "FILIAL 2", "FILIAL 3", "FILIAL 4"]
+COLUNAS_OBRIGATORIAS = {"CODFORNEC", "FILIAL", "FORNECEDOR", "CODCOMPRADOR",
+                        "JANEIRO", "FEVEREIRO", "MARCO"}
+
+
+def ler_aba(path: Any, sheet: str, ano: int) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=sheet)
     # Padroniza nomes de coluna
     df.columns = df.columns.str.strip().str.upper()
@@ -69,14 +76,91 @@ def ler_aba(path: Path, sheet: str, ano: int) -> pd.DataFrame:
     return df
 
 
-def ingerir_tudo() -> pd.DataFrame:
+def ingerir_arquivos(arquivos: dict[int, Any]) -> pd.DataFrame:
+    """Lê todos os Excel (path ou file-like) e devolve DataFrame wide.
+
+    `arquivos` mapeia ano -> caminho ou buffer (BytesIO).
+    """
     partes: list[pd.DataFrame] = []
-    for ano, path in ARQUIVOS.items():
+    for ano, path in arquivos.items():
         xl = pd.ExcelFile(path)
         for sheet in xl.sheet_names:
             partes.append(ler_aba(path, sheet, ano))
     df = pd.concat(partes, ignore_index=True)
     return df
+
+
+def ingerir_tudo() -> pd.DataFrame:
+    return ingerir_arquivos(ARQUIVOS)
+
+
+# --------------------------------------------------------------------------
+# Validação de planilha enviada via upload
+# --------------------------------------------------------------------------
+def detectar_ano_no_nome(nome: str) -> int | None:
+    """Tenta extrair um ano (20xx) do nome do arquivo."""
+    m = re.search(r"(20\d{2})", nome or "")
+    return int(m.group(1)) if m else None
+
+
+def validar_planilha(path_or_buf: Any, nome: str = "") -> dict:
+    """Verifica se a planilha segue o padrão Jayane.
+
+    Retorna: {ok, mensagens, abas, colunas_por_aba, ano_sugerido, linhas}.
+    """
+    res: dict[str, Any] = {
+        "ok": False, "mensagens": [], "abas": [], "colunas_por_aba": {},
+        "ano_sugerido": detectar_ano_no_nome(nome), "linhas": 0,
+    }
+    try:
+        xl = pd.ExcelFile(path_or_buf)
+    except Exception as e:  # arquivo corrompido / não é Excel
+        res["mensagens"].append(f"[ERRO] Não foi possível abrir o Excel: {e}")
+        return res
+
+    res["abas"] = list(xl.sheet_names)
+    abas_padronizadas = [s.strip().upper() for s in xl.sheet_names]
+    faltando = [a for a in ABAS_ESPERADAS if a not in abas_padronizadas]
+    if faltando:
+        res["mensagens"].append(
+            f"[ERRO] Abas faltando: {faltando}. Esperado: {ABAS_ESPERADAS}"
+        )
+        return res
+
+    total_linhas = 0
+    for sheet in xl.sheet_names:
+        if sheet.strip().upper() not in ABAS_ESPERADAS:
+            res["mensagens"].append(f"[AVISO] Aba ignorada: {sheet}")
+            continue
+        df = pd.read_excel(path_or_buf, sheet_name=sheet, nrows=0)
+        cols = {c.strip().upper() for c in df.columns}
+        res["colunas_por_aba"][sheet] = sorted(cols)
+        faltam = COLUNAS_OBRIGATORIAS - cols
+        if faltam:
+            res["mensagens"].append(
+                f"[ERRO] Aba '{sheet}' sem colunas: {sorted(faltam)}"
+            )
+            return res
+        df_full = pd.read_excel(path_or_buf, sheet_name=sheet)
+        total_linhas += len(df_full)
+
+    res["linhas"] = total_linhas
+    res["ok"] = True
+    res["mensagens"].append(f"[OK] Padrão Jayane validado · {total_linhas} linhas · 4 filiais")
+    return res
+
+
+def processar_em_memoria(arquivos: dict[int, Any]) -> dict[str, pd.DataFrame]:
+    """Pipeline completo em memória: recebe {ano: buffer} e devolve os DataFrames."""
+    df_wide = ingerir_arquivos(arquivos)
+    df_long = para_longo(df_wide)
+    return {
+        "fato": df_long,
+        "cons": consolidar_trimestre(df_long),
+        "comp": comparativo_anual(df_long),
+        "dim": dimensao_fornecedor(df_long),
+        "validacoes": validar(df_wide, df_long),
+    }
 
 
 # --------------------------------------------------------------------------
