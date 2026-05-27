@@ -1,9 +1,9 @@
-# Dependências fixadas para deploy reprodutível (Streamlit Community Cloud)
-streamlit==1.57.0
-pandas==2.2.3
-numpy==2.1.3
-plotly==6.7.0
-scikit-learn==1.8.0
-scipy==1.14.1
-openpyxl==3.1.5
-pyarrow==18.1.0
+# Mínimos compatíveis com Python 3.11–3.14 (Streamlit Community Cloud)
+streamlit>=1.57.0
+pandas>=2.2.3
+numpy>=2.1.3
+plotly>=6.0.0
+scikit-learn>=1.5.0
+scipy>=1.14.0
+openpyxl>=3.1.5
+pyarrow>=18.1.0
