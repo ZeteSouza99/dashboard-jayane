@@ -307,97 +307,20 @@ def load_data():
     }
 
 
-dados = st.session_state.get("dados_upload") or load_data()
-fonte_label = st.session_state.get("fonte_label", "Base oficial (parquets)")
-fato = dados["fato"].drop(columns=["FANTASIA", "FORNECEDOR"]).merge(
-    dados["dim"][["CODFORNEC", "FANTASIA", "FORNECEDOR"]], on="CODFORNEC"
-)
-comp = dados["comp"]
-dim = dados["dim"]
-forecast_df = dados["forecast"]
-forecast_total = dados["forecast_total"]
-clusters_df = dados["clusters"]
-anomalias_df = dados["anomalias"]
-metricas_df = dados["metricas"]
-HAS_ML = all(x is not None for x in (forecast_df, forecast_total, clusters_df,
-                                      anomalias_df, metricas_df))
-
-MES_ORDEM = ["JANEIRO", "FEVEREIRO", "MARCO"]
-MES_PT = {"JANEIRO": "Jan", "FEVEREIRO": "Fev", "MARCO": "Mar"}
-
 # =====================================================================
-# Sidebar
+# Tela inicial / Modo Upload — quando não há dados carregados, mostra
+# apenas o drop zone e para a execução (dashboard fica oculto).
 # =====================================================================
-with st.sidebar:
-    st.markdown(
-        '<div style="padding:0.5rem 0 1rem 0; border-bottom:1px solid #E2E8F0; margin-bottom:0.5rem">'
-        '<div style="font-size:1.1rem; font-weight:700; color:#0F766E;">Jayane</div>'
-        '<div style="font-size:0.75rem; color:#64748B;">Inteligência de Compras</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+if "dados_upload" not in st.session_state:
+    st.session_state["upload_mode"] = True
 
-    if st.button("📤 Carregar nova planilha", width="stretch"):
-        st.session_state["upload_mode"] = True
-        st.rerun()
-    if "dados_upload" in st.session_state:
-        if st.button("↩ Voltar à base oficial", width="stretch"):
-            for k in ("dados_upload", "fonte_label", "filtro_ano",
-                      "filtro_filial", "filtro_comprador", "filtro_mes",
-                      "filtro_forn"):
-                st.session_state.pop(k, None)
-            st.rerun()
-
-    st.caption(f"Fonte: **{fonte_label}**")
-    st.markdown("---")
-
-    st.markdown("## Filtros")
-    anos = sorted(fato["ANO"].unique().tolist())
-    filiais = sorted(fato["FILIAL"].unique().tolist())
-    compradores = sorted(fato["CODCOMPRADOR"].unique().tolist())
-    meses_disp = [m for m in MES_ORDEM if m in fato["MES"].unique()]
-
-    sel_ano = st.multiselect("Ano", anos, default=anos, key="filtro_ano")
-    sel_filial = st.multiselect(
-        "Filial", filiais, default=filiais,
-        format_func=lambda x: f"Filial {x}",
-        key="filtro_filial",
-    )
-    sel_comprador = st.multiselect("Comprador", compradores, default=compradores,
-                                     key="filtro_comprador")
-    sel_mes = st.multiselect(
-        "Mês", meses_disp, default=meses_disp,
-        format_func=lambda x: MES_PT.get(x, x),
-        key="filtro_mes",
-    )
-
-    forn_opts = (
-        dim.sort_values("FANTASIA")
-        .assign(label=lambda d: d["FANTASIA"] + "  ·  " + d["CODFORNEC"].astype(str))
-    )
-    sel_labels = st.multiselect(
-        "Indústrias (vazio = todas)", forn_opts["label"].tolist(), default=[],
-        key="filtro_forn",
-    )
-    sel_cods = forn_opts.loc[forn_opts["label"].isin(sel_labels), "CODFORNEC"].tolist()
-
-    st.markdown("---")
-    st.caption(
-        f"**{fato['CODFORNEC'].nunique()}** indústrias · "
-        f"**{len(filiais)}** filiais · "
-        f"**{len(anos)}** anos"
-    )
-
-# =====================================================================
-# Modo Upload (tela cheia)
-# =====================================================================
 if st.session_state.get("upload_mode"):
     st.markdown(
         """
         <div class="app-header" style="background:linear-gradient(135deg,#0F766E 0%,#134E4A 100%);">
             <div>
                 <h1>📤 Carregar planilha</h1>
-                <div class="subtitle">Arraste os arquivos .xlsx ou clique para selecionar</div>
+                <div class="subtitle">Arraste seus arquivos .xlsx para começar a análise</div>
             </div>
         </div>
         """,
@@ -445,70 +368,131 @@ if st.session_state.get("upload_mode"):
                         arquivos_validos[int(ano)] = buf
 
         st.markdown("---")
-        col_a, col_b, col_c = st.columns([2, 1, 1])
-        with col_a:
-            substituir = st.checkbox(
-                "Substituir base atual completamente",
-                value=True,
-                help="Desmarcado: mescla os anos enviados com a base oficial.",
-            )
+        col_b, col_c = st.columns([1, 1])
         with col_b:
             aplicar = st.button(
-                "✅ Aplicar", type="primary", width="stretch",
+                "✅ Aplicar e abrir dashboard", type="primary", width="stretch",
                 disabled=not arquivos_validos,
             )
         with col_c:
-            cancelar = st.button("✖ Cancelar", width="stretch")
+            voltar = st.button(
+                "↩ Voltar ao dashboard atual", width="stretch",
+                disabled="dados_upload" not in st.session_state,
+            )
 
-        if cancelar:
+        if voltar:
             st.session_state.pop("upload_mode", None)
             st.rerun()
 
         if aplicar and arquivos_validos:
             try:
-                from build_fact_table import (
-                    consolidar_trimestre, comparativo_anual, dimensao_fornecedor,
-                )
-                if not substituir:
-                    base = load_data()
-                    anos_novos = set(arquivos_validos.keys())
-                    fato_base = base["fato"][~base["fato"]["ANO"].isin(anos_novos)]
-                    novo = processar_em_memoria(arquivos_validos)
-                    fato_merge = pd.concat([fato_base, novo["fato"]], ignore_index=True)
-                    dados_final = {
-                        "fato": fato_merge,
-                        "cons": consolidar_trimestre(fato_merge),
-                        "comp": comparativo_anual(fato_merge),
-                        "dim": dimensao_fornecedor(fato_merge),
-                        "forecast": None, "forecast_total": None,
-                        "clusters": None, "anomalias": None, "metricas": None,
-                    }
-                    label = f"Mesclado: oficial + upload {sorted(anos_novos)}"
-                else:
-                    novo = processar_em_memoria(arquivos_validos)
-                    dados_final = {
-                        "fato": novo["fato"], "cons": novo["cons"],
-                        "comp": novo["comp"], "dim": novo["dim"],
-                        "forecast": None, "forecast_total": None,
-                        "clusters": None, "anomalias": None, "metricas": None,
-                    }
-                    label = f"Upload (anos {sorted(arquivos_validos.keys())})"
-                # Limpa filtros para usarem os defaults com os novos dados
+                novo = processar_em_memoria(arquivos_validos)
+                dados_final = {
+                    "fato": novo["fato"], "cons": novo["cons"],
+                    "comp": novo["comp"], "dim": novo["dim"],
+                    "forecast": None, "forecast_total": None,
+                    "clusters": None, "anomalias": None, "metricas": None,
+                }
+                label = f"Upload (anos {sorted(arquivos_validos.keys())})"
                 for k in ("filtro_ano", "filtro_filial", "filtro_comprador",
                           "filtro_mes", "filtro_forn"):
                     st.session_state.pop(k, None)
                 st.session_state["dados_upload"] = dados_final
                 st.session_state["fonte_label"] = label
                 st.session_state.pop("upload_mode", None)
-                st.success("✅ Dados aplicados. Recarregando dashboard…")
+                st.success("✅ Dados aplicados. Abrindo dashboard…")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Falha ao processar: {e}")
     else:
-        if st.button("✖ Cancelar e voltar"):
-            st.session_state.pop("upload_mode", None)
-            st.rerun()
+        if "dados_upload" in st.session_state:
+            if st.button("↩ Voltar ao dashboard atual"):
+                st.session_state.pop("upload_mode", None)
+                st.rerun()
     st.stop()
+
+# =====================================================================
+# A partir daqui: dashboard normal (só chega aqui com dados carregados)
+# =====================================================================
+dados = st.session_state["dados_upload"]
+fonte_label = st.session_state.get("fonte_label", "Upload")
+fato = dados["fato"].drop(columns=["FANTASIA", "FORNECEDOR"]).merge(
+    dados["dim"][["CODFORNEC", "FANTASIA", "FORNECEDOR"]], on="CODFORNEC"
+)
+comp = dados["comp"]
+dim = dados["dim"]
+forecast_df = dados["forecast"]
+forecast_total = dados["forecast_total"]
+clusters_df = dados["clusters"]
+anomalias_df = dados["anomalias"]
+metricas_df = dados["metricas"]
+HAS_ML = all(x is not None for x in (forecast_df, forecast_total, clusters_df,
+                                      anomalias_df, metricas_df))
+
+MES_ORDEM = ["JANEIRO", "FEVEREIRO", "MARCO"]
+MES_PT = {"JANEIRO": "Jan", "FEVEREIRO": "Fev", "MARCO": "Mar"}
+
+# =====================================================================
+# Sidebar
+# =====================================================================
+with st.sidebar:
+    st.markdown(
+        '<div style="padding:0.5rem 0 1rem 0; border-bottom:1px solid #E2E8F0; margin-bottom:0.5rem">'
+        '<div style="font-size:1.1rem; font-weight:700; color:#0F766E;">Jayane</div>'
+        '<div style="font-size:0.75rem; color:#64748B;">Inteligência de Compras</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if st.button("📤 Trocar planilha", width="stretch"):
+        st.session_state["upload_mode"] = True
+        st.rerun()
+    if st.button("🗑️ Limpar dados", width="stretch"):
+        for k in ("dados_upload", "fonte_label", "filtro_ano",
+                  "filtro_filial", "filtro_comprador", "filtro_mes",
+                  "filtro_forn"):
+            st.session_state.pop(k, None)
+        st.rerun()
+
+    st.caption(f"Fonte: **{fonte_label}**")
+    st.markdown("---")
+
+    st.markdown("## Filtros")
+    anos = sorted(fato["ANO"].unique().tolist())
+    filiais = sorted(fato["FILIAL"].unique().tolist())
+    compradores = sorted(fato["CODCOMPRADOR"].unique().tolist())
+    meses_disp = [m for m in MES_ORDEM if m in fato["MES"].unique()]
+
+    sel_ano = st.multiselect("Ano", anos, default=anos, key="filtro_ano")
+    sel_filial = st.multiselect(
+        "Filial", filiais, default=filiais,
+        format_func=lambda x: f"Filial {x}",
+        key="filtro_filial",
+    )
+    sel_comprador = st.multiselect("Comprador", compradores, default=compradores,
+                                     key="filtro_comprador")
+    sel_mes = st.multiselect(
+        "Mês", meses_disp, default=meses_disp,
+        format_func=lambda x: MES_PT.get(x, x),
+        key="filtro_mes",
+    )
+
+    forn_opts = (
+        dim.sort_values("FANTASIA")
+        .assign(label=lambda d: d["FANTASIA"] + "  ·  " + d["CODFORNEC"].astype(str))
+    )
+    sel_labels = st.multiselect(
+        "Indústrias (vazio = todas)", forn_opts["label"].tolist(), default=[],
+        key="filtro_forn",
+    )
+    sel_cods = forn_opts.loc[forn_opts["label"].isin(sel_labels), "CODFORNEC"].tolist()
+
+    st.markdown("---")
+    st.caption(
+        f"**{fato['CODFORNEC'].nunique()}** indústrias · "
+        f"**{len(filiais)}** filiais · "
+        f"**{len(anos)}** anos"
+    )
 
 # Aplica filtros
 mask = (
