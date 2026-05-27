@@ -678,7 +678,11 @@ with tabs[1]:
 
     c1, c2 = st.columns([1, 3])
     with c1:
-        top_n = st.slider("Top N", 5, len(rank), min(15, len(rank)))
+        if len(rank) <= 5:
+            top_n = len(rank)
+            st.caption(f"Exibindo todas as {len(rank)} indústrias")
+        else:
+            top_n = st.slider("Top N", 5, len(rank), min(15, len(rank)))
     with c2:
         st.markdown(
             f'<div style="padding-top:1.6rem; color:#64748B; font-size:0.85rem">'
