@@ -32,20 +32,22 @@ ARQUIVOS = {
     2026: RAW_DIR / "TRIMESTRES 2026 DIEGO.xlsx",
 }
 
-MESES_COLS = ["JANEIRO", "FEVEREIRO", "MARCO"]
-MES_NUM = {"JANEIRO": 1, "FEVEREIRO": 2, "MARCO": 3}
+MESES_COLS = [
+    "JANEIRO", "FEVEREIRO", "MARCO", "ABRIL", "MAIO", "JUNHO",
+    "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO",
+]
+MES_NUM = {m: i + 1 for i, m in enumerate(MESES_COLS)}
 
 SCHEMA_BASE = [
-    "ANO", "FILIAL", "CODFORNEC", "FORNECEDOR", "FANTASIA",
-    "CODCOMPRADOR", "JANEIRO", "FEVEREIRO", "MARCO",
-]
+    "ANO", "FILIAL", "CODFORNEC", "FORNECEDOR", "FANTASIA", "CODCOMPRADOR",
+] + MESES_COLS
 
 # --------------------------------------------------------------------------
 # Camadas 1-2: Ingestão + limpeza
 # --------------------------------------------------------------------------
 ABAS_ESPERADAS = ["FILIAL 1", "FILIAL 2", "FILIAL 3", "FILIAL 4"]
-COLUNAS_OBRIGATORIAS = {"CODFORNEC", "FILIAL", "FORNECEDOR", "CODCOMPRADOR",
-                        "JANEIRO", "FEVEREIRO", "MARCO"}
+# Identidade obrigatória; meses são opcionais (basta 1 coluna de mês).
+COLUNAS_OBRIGATORIAS = {"CODFORNEC", "FILIAL", "FORNECEDOR", "CODCOMPRADOR"}
 
 
 def ler_aba(path: Any, sheet: str, ano: int) -> pd.DataFrame:
@@ -70,6 +72,11 @@ def ler_aba(path: Any, sheet: str, ano: int) -> pd.DataFrame:
     for col in ("FORNECEDOR", "FANTASIA", "CODCOMPRADOR"):
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip().str.upper()
+
+    # Garante que todas as colunas de mês existem (faltantes viram NaN)
+    for m in MESES_COLS:
+        if m not in df.columns:
+            df[m] = np.nan
 
     # Reindexa para schema fixo
     df = df.reindex(columns=SCHEMA_BASE)
@@ -141,6 +148,14 @@ def validar_planilha(path_or_buf: Any, nome: str = "") -> dict:
                 f"[ERRO] Aba '{sheet}' sem colunas: {sorted(faltam)}"
             )
             return res
+        # Precisa ter pelo menos UMA coluna de mês válida
+        meses_presentes = [m for m in MESES_COLS if m in cols]
+        if not meses_presentes:
+            res["mensagens"].append(
+                f"[ERRO] Aba '{sheet}' não tem nenhuma coluna de mês reconhecida "
+                f"({MESES_COLS[0]}..{MESES_COLS[-1]})."
+            )
+            return res
         df_full = pd.read_excel(path_or_buf, sheet_name=sheet)
         total_linhas += len(df_full)
 
@@ -174,6 +189,21 @@ def para_longo(df_wide: pd.DataFrame) -> pd.DataFrame:
         value_name="VALOR",
     )
     df_long["MES_NUM"] = df_long["MES"].map(MES_NUM)
+    df_long["VALOR"] = pd.to_numeric(df_long["VALOR"], errors="coerce")
+
+    # Remove meses que não existem nos dados (NaN nos brutos)
+    df_long = df_long.dropna(subset=["VALOR"]).copy()
+
+    # Remove meses agregadamente vazios (futuro/sem movimento): por ANO+MES,
+    # se o total somando todas as filiais/fornecedores for 0, considera
+    # "ainda não aconteceu" e descarta — evita distorcer médias e
+    # comparativos com zeros artificiais.
+    soma_ano_mes = df_long.groupby(["ANO", "MES"])["VALOR"].sum()
+    chaves_vazias = soma_ano_mes[soma_ano_mes <= 0].index
+    if len(chaves_vazias):
+        mask_vazio = df_long.set_index(["ANO", "MES"]).index.isin(chaves_vazias)
+        df_long = df_long.loc[~mask_vazio].copy()
+
     df_long["DATA"] = pd.to_datetime(
         {"year": df_long["ANO"], "month": df_long["MES_NUM"], "day": 1}
     )
