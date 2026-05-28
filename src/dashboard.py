@@ -429,8 +429,18 @@ metricas_df = dados["metricas"]
 HAS_ML = all(x is not None for x in (forecast_df, forecast_total, clusters_df,
                                       anomalias_df, metricas_df))
 
-MES_ORDEM = ["JANEIRO", "FEVEREIRO", "MARCO"]
-MES_PT = {"JANEIRO": "Jan", "FEVEREIRO": "Fev", "MARCO": "Mar"}
+MES_ORDEM = [
+    "JANEIRO", "FEVEREIRO", "MARCO", "ABRIL", "MAIO", "JUNHO",
+    "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO",
+]
+MES_PT = {
+    "JANEIRO": "Jan", "FEVEREIRO": "Fev", "MARCO": "Mar", "ABRIL": "Abr",
+    "MAIO": "Mai", "JUNHO": "Jun", "JULHO": "Jul", "AGOSTO": "Ago",
+    "SETEMBRO": "Set", "OUTUBRO": "Out", "NOVEMBRO": "Nov", "DEZEMBRO": "Dez",
+}
+# Apenas meses que efetivamente têm dados (após filtragem em build_fact_table)
+MES_ORDEM_ATIVO = [m for m in MES_ORDEM if m in fato["MES"].unique()]
+MES_PT_ATIVO = {m: MES_PT[m] for m in MES_ORDEM_ATIVO}
 
 # =====================================================================
 # Sidebar
@@ -461,7 +471,7 @@ with st.sidebar:
     anos = sorted(fato["ANO"].unique().tolist())
     filiais = sorted(fato["FILIAL"].unique().tolist())
     compradores = sorted(fato["CODCOMPRADOR"].unique().tolist())
-    meses_disp = [m for m in MES_ORDEM if m in fato["MES"].unique()]
+    meses_disp = MES_ORDEM_ATIVO
 
     sel_ano = st.multiselect("Ano", anos, default=anos, key="filtro_ano")
     sel_filial = st.multiselect(
@@ -491,8 +501,15 @@ with st.sidebar:
     st.caption(
         f"**{fato['CODFORNEC'].nunique()}** indústrias · "
         f"**{len(filiais)}** filiais · "
-        f"**{len(anos)}** anos"
+        f"**{len(anos)}** anos · "
+        f"**{len(MES_ORDEM_ATIVO)}** meses com dados"
     )
+    if len(MES_ORDEM_ATIVO) < 12:
+        meses_faltando = [MES_PT[m] for m in MES_ORDEM if m not in MES_ORDEM_ATIVO]
+        st.caption(
+            f"ℹ️ Meses sem movimento (excluídos automaticamente): "
+            f"{', '.join(meses_faltando)}"
+        )
 
 # Aplica filtros
 mask = (
@@ -628,7 +645,7 @@ with tabs[0]:
         por_mes = df.groupby(["MES", "ANO"], as_index=False)["VALOR"].sum()
         por_mes["MES_LBL"] = por_mes["MES"].map(MES_PT)
         por_mes["MES_LBL"] = pd.Categorical(
-            por_mes["MES_LBL"], [MES_PT[m] for m in MES_ORDEM], ordered=True
+            por_mes["MES_LBL"], [MES_PT[m] for m in MES_ORDEM_ATIVO], ordered=True
         )
         por_mes = por_mes.sort_values("MES_LBL")
         fig = px.bar(
@@ -646,7 +663,7 @@ with tabs[0]:
     heat = df.groupby(["FILIAL", "MES", "ANO"], as_index=False)["VALOR"].sum()
     heat["MES_LBL"] = heat["MES"].map(MES_PT)
     heat["MES_LBL"] = pd.Categorical(
-        heat["MES_LBL"], [MES_PT[m] for m in MES_ORDEM], ordered=True
+        heat["MES_LBL"], [MES_PT[m] for m in MES_ORDEM_ATIVO], ordered=True
     )
     heat["FILIAL_LBL"] = "Filial " + heat["FILIAL"].astype(str)
     fig = px.density_heatmap(
@@ -738,11 +755,11 @@ with tabs[2]:
     st.plotly_chart(apply_template(fig, height=460), width="stretch")
 
     st.markdown(
-        '<div class="section-title">Sazonalidade — índice mês ÷ média do trimestre</div>',
+        '<div class="section-title">Sazonalidade — índice mês ÷ média do período</div>',
         unsafe_allow_html=True,
     )
     saz = (df.groupby(["FILIAL", "MES"])["VALOR"].sum()
-              .unstack("MES").reindex(columns=MES_ORDEM))
+              .unstack("MES").reindex(columns=MES_ORDEM_ATIVO))
     indice = saz.div(saz.mean(axis=1), axis=0)
     indice.index = ["Filial " + str(i) for i in indice.index]
     indice.columns = [MES_PT[c] for c in indice.columns]
