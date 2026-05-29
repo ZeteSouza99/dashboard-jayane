@@ -55,6 +55,14 @@ def ler_aba(path: Any, sheet: str, ano: int) -> pd.DataFrame:
     # Padroniza nomes de coluna
     df.columns = df.columns.str.strip().str.upper()
 
+    # Aliases conhecidos para FANTASIA (algumas planilhas usam REP_OBS, NOME, etc.)
+    aliases_fantasia = ["REP_OBS", "NOME_FANTASIA", "NOME", "APELIDO"]
+    if "FANTASIA" not in df.columns:
+        for alt in aliases_fantasia:
+            if alt in df.columns:
+                df = df.rename(columns={alt: "FANTASIA"})
+                break
+
     # Descarta derivadas (vamos recalcular)
     for col in ("TOTAL", "MEDIA"):
         if col in df.columns:
@@ -68,10 +76,20 @@ def ler_aba(path: Any, sheet: str, ano: int) -> pd.DataFrame:
         raise ValueError(f"{path.name}/{sheet}: coluna FILIAL diverge do nome da aba")
     df["FILIAL"] = filial_src
 
-    # Normaliza strings
+    # Normaliza strings + fallback para FANTASIA vazia (usa primeiras palavras do FORNECEDOR)
     for col in ("FORNECEDOR", "FANTASIA", "CODCOMPRADOR"):
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip().str.upper()
+            df.loc[df[col].isin(["", "NAN", "NONE", "<NA>"]), col] = np.nan
+    if "FANTASIA" not in df.columns or df["FANTASIA"].isna().all():
+        df["FANTASIA"] = df.get("FORNECEDOR", pd.Series(dtype=str)).str.split().str[:2].str.join(" ")
+    else:
+        # preenche faltantes individuais com primeiras 2 palavras do FORNECEDOR
+        falt = df["FANTASIA"].isna()
+        if falt.any() and "FORNECEDOR" in df.columns:
+            df.loc[falt, "FANTASIA"] = (
+                df.loc[falt, "FORNECEDOR"].str.split().str[:2].str.join(" ")
+            )
 
     # Garante que todas as colunas de mês existem (faltantes viram NaN)
     for m in MESES_COLS:
@@ -238,17 +256,29 @@ def consolidar_trimestre(df_long: pd.DataFrame) -> pd.DataFrame:
     return cons
 
 
+def _moda_segura(s: pd.Series) -> str:
+    """Retorna a moda da série ou string vazia se não houver valores."""
+    s = s.dropna()
+    if s.empty:
+        return ""
+    m = s.mode()
+    return m.iat[0] if not m.empty else (s.iat[0] if len(s) else "")
+
+
 def dimensao_fornecedor(df_long: pd.DataFrame) -> pd.DataFrame:
     """Dim: 1 linha por CODFORNEC com nomes mais frequentes (lida com variações)."""
     dim = (
         df_long.groupby("CODFORNEC")
         .agg(
-            FORNECEDOR=("FORNECEDOR", lambda s: s.mode().iat[0]),
-            FANTASIA=("FANTASIA", lambda s: s.mode().iat[0]),
+            FORNECEDOR=("FORNECEDOR", _moda_segura),
+            FANTASIA=("FANTASIA", _moda_segura),
             N_REGISTROS=("VALOR", "size"),
         )
         .reset_index()
     )
+    # Fallback final: FANTASIA vazia herda FORNECEDOR
+    vazia = dim["FANTASIA"].isin(["", "NAN", "NONE"]) | dim["FANTASIA"].isna()
+    dim.loc[vazia, "FANTASIA"] = dim.loc[vazia, "FORNECEDOR"].str.split().str[:2].str.join(" ")
     return dim
 
 
